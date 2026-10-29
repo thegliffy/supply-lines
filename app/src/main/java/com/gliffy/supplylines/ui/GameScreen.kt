@@ -8,14 +8,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -25,8 +23,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,60 +31,80 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
-import kotlinx.coroutines.delay
 import kotlin.math.sqrt
+import com.gliffy.supplylines.BuildOption
 import com.gliffy.supplylines.GameViewModel
-import com.gliffy.supplylines.engine.NodeKind
-import com.gliffy.supplylines.engine.NodeRuntime
-import com.gliffy.supplylines.engine.ResourceKind
+import com.gliffy.supplylines.engine.BuildingKind
+import com.gliffy.supplylines.engine.BuildingRuntime
+import com.gliffy.supplylines.engine.GameEngine
+import com.gliffy.supplylines.engine.GateDef
+import com.gliffy.supplylines.engine.Item
 
 private object Palette {
     val Bg = Color(0xFF0E1116)
     val Panel = Color(0xFF161B22)
+    val Grid = Color(0xFF1C232E)
     val LineIdle = Color(0xFF3A4453)
     val LineHot = Color(0xFF7FB2FF)
     val TextMain = Color(0xFFD8DEE9)
     val TextDim = Color(0xFF8A93A3)
-    val Source = Color(0xFFE0A458)
-    val Converter = Color(0xFF4FB8A8)
-    val Depot = Color(0xFF8A93A3)
-    val Market = Color(0xFF6FCF7F)
     val Coin = Color(0xFFE5C07B)
+    val Machine = Color(0xFF4FB8A8)
+    val Miner = Color(0xFFE0A458)
+    val Storage = Color(0xFF8A93A3)
+    val Hub = Color(0xFFE5C07B)
+    val Elevator = Color(0xFF9D7CE0)
+    val Sink = Color(0xFF6FCF7F)
+    val Bench = Color(0xFF66738A)
 
-    fun res(c: ResourceKind) = when (c) {
-        ResourceKind.ORE -> Source
-        ResourceKind.PART -> Converter
-        ResourceKind.CHIP -> Color(0xFF9D7CE0)
+    fun item(c: Item) = when (c) {
+        Item.IRON_ORE, Item.IRON_INGOT, Item.IRON_PLATE, Item.IRON_ROD, Item.IRON_SCREW,
+        Item.REINFORCED_IRON_PLATE, Item.IRON_ROTOR, Item.SMART_PLATING -> Color(0xFFE0A458)
+        Item.COPPER_ORE, Item.COPPER_INGOT, Item.WIRE, Item.CABLE, Item.AUTOMATED_WIRING -> Color(0xFFD07B4F)
+        Item.COAL, Item.STEEL_INGOT, Item.STEEL_BEAM -> Color(0xFF9AA5B4)
+        Item.MODULAR_FRAME -> Color(0xFF9D7CE0)
     }
 
-    fun kind(c: NodeKind) = when (c) {
-        NodeKind.SOURCE -> Source
-        NodeKind.CONVERTER -> Converter
-        NodeKind.DEPOT -> Depot
-        NodeKind.MARKET -> Market
+    fun kind(c: BuildingKind) = when (c) {
+        BuildingKind.MINER -> Miner
+        BuildingKind.SMELTER, BuildingKind.MANUFACTURER, BuildingKind.CONSTRUCTOR,
+        BuildingKind.ASSEMBLER, BuildingKind.FOUNDRY -> Machine
+        BuildingKind.MANUAL_BENCH -> Bench
+        BuildingKind.STORAGE -> Storage
+        BuildingKind.HUB -> Hub
+        BuildingKind.ELEVATOR -> Elevator
+        BuildingKind.SINK -> Sink
     }
 
-    fun shape(c: NodeKind) = when (c) {
-        NodeKind.SOURCE -> "SOURCE"
-        NodeKind.CONVERTER -> "CONVERTER"
-        NodeKind.DEPOT -> "DEPOT"
-        NodeKind.MARKET -> "MARKET"
+    /** Short tag drawn on the cell. */
+    fun tag(c: BuildingKind) = when (c) {
+        BuildingKind.MINER -> "MNR"
+        BuildingKind.SMELTER -> "SML"
+        BuildingKind.MANUAL_BENCH -> "BEN"
+        BuildingKind.MANUFACTURER -> "MFG"
+        BuildingKind.CONSTRUCTOR -> "CON"
+        BuildingKind.ASSEMBLER -> "ASM"
+        BuildingKind.FOUNDRY -> "FND"
+        BuildingKind.STORAGE -> "STO"
+        BuildingKind.HUB -> "HUB"
+        BuildingKind.ELEVATOR -> "ELV"
+        BuildingKind.SINK -> "SNK"
     }
 }
 
@@ -108,383 +124,288 @@ private fun fmt(n: Double): String {
 fun GameScreen(vm: GameViewModel) {
     val engine = vm.engine
     val tick by vm.tick.collectAsState()
-    var selected by remember { mutableStateOf<String?>(null) }
+    var selected by remember { mutableStateOf<String?>(null) }          // building id
+    var selectedCell by remember { mutableStateOf<Pair<Int, Int>?>(null) } // empty cell
     var connectFrom by remember { mutableStateOf<String?>(null) }
     var showResetDialog by remember { mutableStateOf(false) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
+    var boxSize by remember { mutableStateOf(IntSize.Zero) }
+    val measurer = rememberTextMeasurer()
 
-    LaunchedEffect(Unit) {
+    androidx.compose.runtime.LaunchedEffect(Unit) {
         vm.toast.collect { msg ->
             if (msg != null) {
                 toastMsg = msg
-                delay(4000)
-                if (vm.toast.value == msg) vm.consumeToast()
+                kotlinx.coroutines.delay(4000)
                 toastMsg = null
+                vm.consumeToast()
             }
         }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val obs = object : LifecycleEventObserver {
-            override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
-                if (event == Lifecycle.Event.ON_STOP) vm.saveNow()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(obs)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
-    }
-
-    fun tapNode(id: String) {
-        val from = connectFrom
-        if (from != null && from != id) {
-            if (!vm.tryBuildLine(from, id)) {
-                vm.toast("Need ${engine.lineCost(from, id)} coins to connect")
-            }
-            connectFrom = null
-            selected = null
-        } else {
-            selected = id
-        }
-    }
-
-    Box(Modifier.fillMaxSize().background(Palette.Bg)) {
-        Column(Modifier.fillMaxSize()) {
-            TopBar(vm, tick) { showResetDialog = true }
-            MapCanvas(
-                vm = vm,
-                selected = selected,
-                connectFrom = connectFrom,
-                onNodeTap = ::tapNode,
-                onEmpty = { selected = null; connectFrom = null },
-                modifier = Modifier.weight(1f)
-            )
-            BottomPanel(
-                vm = vm,
-                tick = tick,
-                selected = selected,
-                connectFrom = connectFrom,
-                onConnectMode = { connectFrom = it },
-                onCancelConnect = { connectFrom = null }
-            )
-        }
-
-        toastMsg?.let { msg ->
-            Text(
-                msg,
-                color = Palette.TextMain,
-                fontFamily = MONO,
-                fontSize = 13.sp,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 84.dp, start = 24.dp, end = 24.dp)
-                    .background(Palette.Panel, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 16.dp, vertical = 10.dp)
-            )
-        }
-
-        if (showResetDialog) {
-            AlertDialog(
-                onDismissRequest = { showResetDialog = false },
-                title = { Text("Reset game?", color = Palette.TextMain) },
-                text = { Text("Sandbox build — all progress is wiped.", color = Palette.TextDim) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        vm.resetGame(); showResetDialog = false; selected = null; connectFrom = null
-                    }) { Text("RESET", color = Palette.Market) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showResetDialog = false }) { Text("CANCEL", color = Palette.TextDim) }
-                },
-                containerColor = Palette.Panel
-            )
-        }
-    }
-}
-
-@Composable
-private fun TopBar(vm: GameViewModel, tick: Int, onReset: () -> Unit) {
-    val engine = vm.engine
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column {
-            Text("${fmt(engine.state.coins.toDouble())} ⛁", fontFamily = MONO, fontSize = 26.sp,
-                fontWeight = FontWeight.Bold, color = Palette.Coin)
-            Text("+${fmt(engine.state.cpsAlpha * 60)}/min", fontFamily = MONO, fontSize = 12.sp,
-                color = Palette.TextDim)
-        }
-        Spacer(Modifier.weight(1f))
-        Column(horizontalAlignment = Alignment.End) {
-            val total = engine.state.delivered.values.sum()
-            Text("$total sold", fontFamily = MONO, fontSize = 12.sp, color = Palette.TextDim)
-            TextButton(onClick = onReset, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
-                Text("RESET", fontSize = 11.sp, color = Palette.TextDim)
-            }
-        }
-    }
-}
-
-@Composable
-private fun MapCanvas(
-    vm: GameViewModel,
-    selected: String?,
-    connectFrom: String?,
-    onNodeTap: (String) -> Unit,
-    onEmpty: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val engine = vm.engine
-    val tick by vm.tick.collectAsState()
+    // Map area occupies the top portion; panel below.
     val density = LocalDensity.current
-    val measurer = rememberTextMeasurer()
-    val boxSize = remember { mutableStateOf(Offset.Zero) }
+    val panelH = 230
+    val mapW = boxSize.width.toFloat()
+    val mapH = (boxSize.height - panelH).coerceAtLeast(1).toFloat()
+    val cell = minOf(mapW / 11f, mapH / 11f)          // one spare ring of padding
+    val originX = (mapW - cell * 10) / 2
+    val originY = (mapH - cell * 10) / 2
+    fun cellPx(x: Int, y: Int) = Offset(originX + (x + 0.5f) * cell, originY + (y + 0.5f) * cell)
+    fun bPx(b: BuildingRuntime) = cellPx(b.x, b.y)
 
-    val nodeRadius = with(density) { 22.dp.toPx() }
-    val hitRadius = with(density) { 36.dp.toPx() }
-
-    fun nodePx(id: String): Offset {
-        val def = engine.nodeDef(id)
-        val bs = boxSize.value
-        return Offset((def.x * bs.x).toFloat(), (def.y * bs.y).toFloat())
-    }
-
-    fun hitTest(pos: Offset): String? {
-        var best: String? = null
-        var bestD = hitRadius
-        for ((id, _) in engine.state.nodes) {
-            val p = nodePx(id)
-            val d = sqrt((p.x - pos.x) * (p.x - pos.x) + (p.y - pos.y) * (p.y - pos.y))
-            if (d <= bestD) { bestD = d; best = id }
+    Column(Modifier.fillMaxSize().background(BgLocal)) {
+        // ---- Top bar: coins + throughput ----
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("COINS", fontFamily = MONO, fontSize = 11.sp, color = Palette.TextDim)
+                Text(fmt(engine.state.coins.toDouble()), fontFamily = MONO, fontSize = 26.sp,
+                    fontWeight = FontWeight.Bold, color = Palette.Coin)
+            }
+            Spacer(Modifier.width(28.dp))
+            Column {
+                Text("INCOME", fontFamily = MONO, fontSize = 11.sp, color = Palette.TextDim)
+                Text("${fmt(engine.state.cpsAlpha)}/s", fontFamily = MONO, fontSize = 16.sp, color = Palette.TextMain)
+            }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { showResetDialog = true }) { Text("RESET", fontFamily = MONO, fontSize = 12.sp, color = Palette.TextDim) }
         }
-        return best
-    }
 
-    Box(
-        modifier
-            .fillMaxWidth()
-            .fillMaxHeight()
-            .onSizeChanged { boxSize.value = Offset(it.width.toFloat(), it.height.toFloat()) }
-    ) {
-        Canvas(
-            Modifier
-                .matchParentSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(onTap = { pos ->
-                        val id = hitTest(pos)
-                        if (id != null) onNodeTap(id) else onEmpty()
-                    })
+        // ---- Map ----
+        Box(
+            Modifier.fillMaxWidth().withHeightDp((boxSize.height / density.density - panelH / density.density).coerceAtLeast(100f).dp)
+                .onSizeChanged { boxSize = it }
+                .pointerInput(tick) {
+                    detectTapGestures { off ->
+                        val gx = ((off.x - originX) / cell).toInt()
+                        val gy = ((off.y - originY) / cell).toInt()
+                        if (gx in 0 until 10 && gy in 0 until 10) {
+                            val hit = engine.state.buildings.values.find { it.x == gx && it.y == gy }
+                            if (hit != null) {
+                                if (connectFrom != null && connectFrom != hit.id) {
+                                    if (vm.tryBuildLine(connectFrom!!, hit.id)) connectFrom = null else vm.toast("Can't link: need coins")
+                                    selected = hit.id; selectedCell = null
+                                } else { selected = hit.id; selectedCell = null }
+                            } else {
+                                selectedCell = gx to gy; selected = null
+                            }
+                        }
+                    }
                 }
         ) {
-            // lines
-            for (l in engine.state.lines) {
-                val hot = connectFrom != null && (l.a == connectFrom || l.b == connectFrom)
-                drawLine(
-                    color = if (hot) Palette.LineHot else Palette.LineIdle,
-                    start = nodePx(l.a), end = nodePx(l.b),
-                    strokeWidth = if (hot) 5.dp.toPx() else 3.dp.toPx(),
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round
-                )
-            }
-            // shipments (the dots — this is the fun bit)
-            for (sh in engine.state.shipments) {
-                val a = nodePx(sh.path[sh.edge])
-                val b = nodePx(sh.path[sh.edge + 1])
-                val edgeTime = kotlin.math.sqrt(
-                    ((engine.nodeDef(sh.path[sh.edge]).x - engine.nodeDef(sh.path[sh.edge + 1]).x)
-                        .let { it * it } + (engine.nodeDef(sh.path[sh.edge]).y - engine.nodeDef(sh.path[sh.edge + 1]).y)
-                            .let { it * it })
-                ) / vm.engine.content.speedTiers[
-                    engine.line(sh.path[sh.edge], sh.path[sh.edge + 1])!!.speedTier
-                ]
-                val t = (sh.progress / edgeTime).coerceIn(0.0, 1.0)
-                drawCircle(Palette.res(sh.res), radius = 5.dp.toPx(), center = Offset(
-                    (a.x + (b.x - a.x) * t).toFloat(), (a.y + (b.y - a.y) * t).toFloat()
-                ))
-            }
-            // nodes
-            for ((id, rt) in engine.state.nodes) {
-                val def = engine.nodeDef(id)
-                val c = nodePx(id)
-                val r = nodeRadius
-                val color = Palette.kind(def.kind)
-                if (!rt.unlocked) {
-                    drawCircle(
-                        color = Palette.LineIdle, radius = r, center = c,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                            width = 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f)))
-                    )
-                    drawCompatText(this, measurer, def.name.uppercase(), Palette.TextDim, c,
-                        def.unlockCost.toString() + " ⛁", density)
-                } else {
-                    when (def.kind) {
-                        NodeKind.SOURCE -> {
-                            val path = Path().apply {
-                                moveTo(c.x, c.y - r); lineTo(c.x + r * 0.9f, c.y + r * 0.7f); lineTo(c.x - r * 0.9f, c.y + r * 0.7f); close()
-                            }
-                            drawPath(path, color)
+            Canvas(Modifier.fillMaxSize()) {
+                // grid
+                for (i in 0..10) for (j in 0..10) {
+                    if (i in 0 until 10 && j in 0 until 10) {
+                        val ore = engine.content.oreCells.find { it.x == j && it.y == i }
+                        if (ore != null) {
+                            drawRoundRect(Palette.item(ore.item).copy(alpha = 0.12f),
+                                Offset(originX + j * cell, originY + i * cell),
+                                androidx.compose.ui.geometry.Size(cell, cell), androidx.compose.ui.geometry.CornerRadius(6f, 6f))
                         }
-                        NodeKind.CONVERTER -> drawCompatRoundRect(this, c, r * 0.85f, color)
-                        NodeKind.DEPOT -> {
-                            val path = Path().apply {
+                    }
+                }
+                for (i in 0..10) {
+                    drawLine(Palette.Grid, Offset(originX + i * cell, originY), Offset(originX + i * cell, originY + 10 * cell), 1f)
+                    drawLine(Palette.Grid, Offset(originX, originY + i * cell), Offset(originX + 10 * cell, originY + i * cell), 1f)
+                }
+                // supply lines
+                for (l in engine.state.lines) {
+                    val a = engine.building(l.a) ?: continue
+                    val b = engine.building(l.b) ?: continue
+                    val busy = l.reserved > 0
+                    drawLine(if (busy) Palette.LineHot else Palette.LineIdle,
+                        bPx(a), bPx(b), if (busy) 3.5f else 2f,
+                        pathEffect = if (busy) null else PathEffect.dashPathEffect(floatArrayOf(6f, 8f)))
+                }
+                // shipments
+                for (sh in engine.state.shipments) {
+                    if (sh.edge >= sh.path.size - 1) continue
+                    val a = engine.building(sh.path[sh.edge]) ?: continue
+                    val b = engine.building(sh.path[sh.edge + 1]) ?: continue
+                    val l = engine.line(sh.path[sh.edge], sh.path[sh.edge + 1]) ?: continue
+                    val speed = engine.content.speedTiers[l.speedTier]
+                    val edgeLen = sqrt(((a.x - b.x).toDouble() * (a.x - b.x)) + ((a.y - b.y).toDouble() * (a.y - b.y)))
+                    val t = (sh.progress / (edgeLen / speed)).coerceIn(0.0, 1.0)
+                    val p0 = bPx(a); val p1 = bPx(b)
+                    drawCircle(Palette.item(sh.item), 7f, Offset(p0.x + (p1.x - p0.x) * t.toFloat(), p0.y + (p1.y - p0.y) * t.toFloat()))
+                }
+                // buildings
+                for (b in engine.state.buildings.values) {
+                    val c = bPx(b)
+                    val col = Palette.kind(b.kind)
+                    val big = b.kind == BuildingKind.HUB || b.kind == BuildingKind.ELEVATOR || b.kind == BuildingKind.SINK
+                    val r = if (big) cell * 0.34f else cell * 0.26f
+                    val sel = selected == b.id || connectFrom == b.id
+                    when (b.kind) {
+                        BuildingKind.MINER -> {
+                            val p = Path().apply {
+                                moveTo(c.x, c.y - r); lineTo(c.x + r, c.y + r); lineTo(c.x - r, c.y + r); close()
+                            }
+                            drawPath(p, col)
+                        }
+                        BuildingKind.STORAGE, BuildingKind.HUB -> {
+                            val p = Path().apply {
                                 moveTo(c.x, c.y - r); lineTo(c.x + r, c.y); lineTo(c.x, c.y + r); lineTo(c.x - r, c.y); close()
                             }
-                            drawPath(path, color)
+                            drawPath(p, if (b.kind == BuildingKind.STORAGE) col.copy(alpha = 0.5f) else col)
                         }
-                        NodeKind.MARKET -> drawCircle(color, radius = r, center = c)
+                        BuildingKind.SINK, BuildingKind.ELEVATOR -> drawCircle(col, r, c)
+                        else -> drawRoundRect(col, c - Offset(r, r), Size(r * 2, r * 2), androidx.compose.ui.geometry.CornerRadius(8f, 8f))
                     }
-                    // tier pips
-                    for (i in 0 until rt.tier) {
-                        drawCircle(Palette.Bg, radius = 3.dp.toPx(),
-                            center = Offset(c.x - 8.dp.toPx() + i * 8.dp.toPx(), c.y + r + 8.dp.toPx()))
-                    }
-                    drawCompatText(this, measurer, def.name.uppercase(), Palette.TextDim, c, null, density)
-                }
-                if (id == selected || id == connectFrom) {
-                    drawCircle(
-                        color = if (id == connectFrom) Palette.LineHot else Color.White,
-                        radius = r + 6.dp.toPx(), center = c,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
-                    )
+                    if (sel) drawCircle(Palette.LineHot, r + 6f, c, style = Stroke(width = 2.5f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))))
+                    if (b.tier > 0) for (i in 0 until b.tier)
+                        drawCircle(col.copy(alpha = 0.7f), r + 10f + i * 7f, c, style = Stroke(width = 1.5f))
+                    // tag
+                    val ts = androidx.compose.ui.text.TextStyle(color = if (big) col else Palette.TextDim, fontSize = 12.sp, fontFamily = MONO)
+                    val lr = measurer.measure(Palette.tag(b.kind), ts)
+                    drawText(lr, color = if (big) col else Palette.TextDim,
+                        topLeft = Offset(c.x - lr.size.width / 2, c.y + r + 4f))
                 }
             }
         }
+
+        // ---- Bottom panel ----
+        Box(Modifier.fillMaxWidth().height(230.dp).background(Palette.Panel.copy(alpha = 0.6f)).padding(horizontal = 20.dp, vertical = 12.dp)) {
+            val gate = engine.currentGate()
+            val selB = selected?.let { engine.building(it) }
+            val cellSel = selectedCell
+            when {
+                selB != null -> BuildingPanel(vm, engine, selB, gate,
+                    onConnect = { connectFrom = selB.id; selected = null },
+                    onCancelConnect = { connectFrom = null })
+                cellSel != null -> BuildMenu(vm, cellSel.first, cellSel.second, onPick = { opt ->
+                    if (vm.place(opt.defId, opt.recipeId, cellSel.first, cellSel.second)) {
+                        vm.toast("Built ${opt.label}")
+                        selectedCell = null
+                    } else vm.toast("Can't build here")
+                })
+                else -> GateSummary(vm, engine)
+            }
+        }
+
+        toastMsg?.let {
+            Box(Modifier.fillMaxWidth().padding(bottom = 240.dp), contentAlignment = Alignment.BottomCenter) {
+                Text(it, fontFamily = MONO, fontSize = 13.sp, color = Palette.Coin,
+                    modifier = Modifier.background(Palette.Panel.copy(alpha = 0.92f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 16.dp, vertical = 9.dp))
+            }
+        }
+    }
+
+    if (showResetDialog) {
+        AlertDialog(onDismissRequest = { showResetDialog = false },
+            confirmButton = { Button(onClick = { showResetDialog = false; vm.resetGame() }) { Text("RESET") } },
+            dismissButton = { TextButton(onClick = { showResetDialog = false }) { Text("CANCEL") } },
+            title = { Text("Reset game?", fontFamily = MONO) },
+            text = { Text("Wipes coins, buildings, belts and tech progress.", fontFamily = MONO, fontSize = 13.sp) })
     }
 }
 
+private val BgLocal = Palette.Bg
+
+private fun Modifier.withHeightDp(h: androidx.compose.ui.unit.Dp) = this.height(h)
+
 @Composable
-private fun BottomPanel(
-    vm: GameViewModel,
-    tick: Int,
-    selected: String?,
-    connectFrom: String?,
-    onConnectMode: (String) -> Unit,
-    onCancelConnect: () -> Unit
-) {
-    val engine = vm.engine
-    Column(
-        Modifier.fillMaxWidth().background(Palette.Panel).padding(horizontal = 16.dp, vertical = 12.dp)
-            .height(172.dp)
-    ) {
-        val id = connectFrom ?: selected
-        if (id == null) {
-            Text("SUPPLY LINES", fontFamily = MONO, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Palette.TextMain)
+private fun GateSummary(vm: GameViewModel, engine: GameEngine) {
+    val gate = engine.currentGate()
+    Column {
+        if (gate == null) {
+            Text("ALL PHASES COMPLETE — T4 UNLOCKED", fontFamily = MONO, fontSize = 14.sp,
+                fontWeight = FontWeight.Bold, color = Palette.Elevator)
             Spacer(Modifier.height(6.dp))
-            Text("Tap a node → connect mines to converters, converters to markets. Lines carry limited cargo; upgrades raise throughput. Tapping another node while a node is selected builds a line.",
-                fontSize = 12.sp, color = Palette.TextDim, lineHeight = 16.sp)
-            return@Column
+            Text("Phase 2 (real game): 1000 Smart Plating, 1000 Modular Frames, 100 Automated Wiring — coming in a later update.",
+                fontFamily = MONO, fontSize = 11.sp, color = Palette.TextDim)
+        } else {
+            Text("TECH TREE · ${gate.name}", fontFamily = MONO, fontSize = 12.sp, color = Palette.TextDim)
+            Spacer(Modifier.height(6.dp))
+            gate.requires.forEach { (item, need) ->
+                val have = engine.gateCount(gate.id, item)
+                Text("${itemShort(item)}  ${minOf(have, need.toLong())}/$need", fontFamily = MONO, fontSize = 14.sp,
+                    color = if (have >= need) Palette.Sink else Palette.TextMain)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text("Deliver to ${gate.name.substringBefore(' ')} via belts · complete to unlock the next tier.",
+                fontFamily = MONO, fontSize = 11.sp, color = Palette.TextDim)
         }
+    }
+}
 
-        val def = engine.nodeDef(id)
-        val rt = engine.runtime(id)
-
+@Composable
+private fun BuildingPanel(vm: GameViewModel, engine: GameEngine, b: BuildingRuntime, gate: GateDef?,
+                          onConnect: () -> Unit, onCancelConnect: () -> Unit) {
+    val def = engine.def(b.defId)
+    Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(def.name.uppercase(), fontFamily = MONO, fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                color = Palette.kind(def.kind))
-            Spacer(Modifier.width(8.dp))
-            Text("· ${Palette.shape(def.kind)}", fontFamily = MONO, fontSize = 11.sp, color = Palette.TextDim)
-            Spacer(Modifier.weight(1f))
-            if (!rt.unlocked) {
-                Button(onClick = { if (!vm.tryUnlock(id)) vm.toast("Not enough coins") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Palette.Market, contentColor = Palette.Bg)) {
-                    Text("ACTIVATE ${def.unlockCost} ⛁", fontSize = 12.sp, fontFamily = MONO)
-                }
-            } else {
-                OutlinedButton(onClick = { if (connectFrom == id) onCancelConnect() else onConnectMode(id) }) {
-                    Text(if (connectFrom == id) "TAP TARGET" else "CONNECT", fontSize = 12.sp, fontFamily = MONO,
-                        color = if (connectFrom == id) Palette.LineHot else Palette.TextMain)
-                }
-            }
+            Text(def.name, fontFamily = MONO, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                color = Palette.kind(b.kind))
+            Spacer(Modifier.width(10.dp))
+            Text("MK.${b.tier + 1}", fontFamily = MONO, fontSize = 12.sp, color = Palette.TextDim)
         }
-
-        Spacer(Modifier.height(6.dp))
-
-        if (rt.unlocked) {
-            if (def.rate > 0.0 && def.produce != null) {
-                val mults = engine.content.nodeRateMults
-                val rate = def.rate * mults[minOf(rt.tier, mults.lastIndex)]
-                Text("Outputs ${Palette.shape(def.kind).let { "" }}${def.produce} at ${"%.1f".format(rate)}/s · tier ${rt.tier}",
-                    fontFamily = MONO, fontSize = 12.sp, color = Palette.TextMain)
-                if (rt.tier < mults.lastIndex) {
-                    TextButton(onClick = { if (!vm.tryUpgradeNode(id)) vm.toast("Not enough coins") }) {
-                        Text("OUTPUT x2 — ${engine.nodeUpgCost(id)} ⛁", fontSize = 12.sp, fontFamily = MONO,
-                            color = Palette.Coin)
-                    }
+        val r = engine.recipe(b.recipe)
+        if (r != null) {
+            Text(r.inputs.entries.joinToString(" + ") { "${it.value} ${itemShort(it.key)}" } +
+                    " → " + r.outputs.entries.joinToString(" + ") { "${it.value} ${itemShort(it.key)}" },
+                fontFamily = MONO, fontSize = 12.sp, color = Palette.TextDim)
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = onConnect) { Text("CONNECT", fontFamily = MONO, fontSize = 12.sp) }
+            if (def.kind != BuildingKind.STORAGE && b.tier < engine.content.rateMults.size - 1) {
+                OutlinedButton(onClick = { vm.tryUpgradeBuilding(b.id) }) {
+                    Text("MK.${b.tier + 2} · ${engine.upgradeCost(b.tier)}", fontFamily = MONO, fontSize = 12.sp)
                 }
             }
-            if (def.wants.isNotEmpty()) {
-                Text(def.wants.entries.joinToString(" · ") { (res, _) ->
-                    "${def.pay[res]?.let { "sells $res @ ${it}⛁" } ?: "takes $res"}"
-                }, fontFamily = MONO, fontSize = 12.sp, color = Palette.Market)
-            }
-            HorizontalDivider(color = Palette.LineIdle, thickness = 1.dp, modifier = Modifier.padding(vertical = 4.dp))
-            val lines = engine.state.lines.filter { it.a == id || it.b == id }
-            if (lines.isEmpty()) {
-                Text("No supply lines yet.", fontSize = 12.sp, color = Palette.TextDim)
-            }
-            for (l in lines) {
-                val other = if (l.a == id) l.b else l.a
-                val capTable = engine.content.capTiers
-                val spdTable = engine.content.speedTiers
-                val cap = capTable[minOf(l.capTier, capTable.lastIndex)]
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("→ ${engine.nodeDef(other).name.uppercase()} [${l.reserved}/$cap] spd ${"%.2f".format(spdTable[minOf(l.speedTier, spdTable.lastIndex)])}",
-                        fontFamily = MONO, fontSize = 11.sp, color = Palette.TextMain)
-                    Spacer(Modifier.weight(1f))
-                    val spdCost = engine.lineSpeedUpgCost(l)
-                    val capCost = engine.lineCapUpgCost(l)
-                    if (spdCost != null) SmallUpButton("SPD ${spdCost}") { if (!vm.tryUpgradeLineSpeed(id, other)) vm.toast("Not enough coins") }
-                    if (capCost != null) SmallUpButton("CAP ${capCost}") { if (!vm.tryUpgradeLineCap(id, other)) vm.toast("Not enough coins") }
-                }
+            if (!def.fixed) {
+                OutlinedButton(onClick = { vm.sell(b.id) }) { Text("SELL ${def.cost / 2}", fontFamily = MONO, fontSize = 12.sp) }
             }
         }
     }
 }
 
 @Composable
-private fun SmallUpButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-        modifier = Modifier.height(28.dp)
-    ) { Text(label, fontSize = 10.sp, fontFamily = MONO, color = Palette.Coin) }
-}
-
-// ---- canvas text helpers ----
-
-private fun drawCompatText(
-    scope: androidx.compose.ui.graphics.drawscope.DrawScope,
-    measurer: androidx.compose.ui.text.TextMeasurer,
-    label: String,
-    color: Color,
-    c: Offset,
-    sub: String?,
-    density: androidx.compose.ui.unit.Density
-) {
-    val style = androidx.compose.ui.text.TextStyle(color = color, fontSize = 11.sp, fontFamily = MONO)
-    val layout = measurer.measure(label, style)
-    scope.drawText(measurer, label, Offset(c.x - layout.size.width / 2f, c.y + 26f * density.density), style)
-    if (sub != null) {
-        val subStyle = androidx.compose.ui.text.TextStyle(color = Palette.Coin, fontSize = 12.sp, fontFamily = MONO)
-        val subLayout = measurer.measure(sub, subStyle)
-        scope.drawText(measurer, sub, Offset(
-            c.x - subLayout.size.width / 2f,
-            c.y + 26f * density.density + layout.size.height + 2f
-        ), subStyle)
+private fun BuildMenu(vm: GameViewModel, x: Int, y: Int, onPick: (BuildOption) -> Unit) {
+    val opts = vm.buildOptionsFor(x, y)
+    Column {
+        Text("BUILD ON CELL ($x,$y)", fontFamily = MONO, fontSize = 12.sp, color = Palette.TextDim)
+        Spacer(Modifier.height(6.dp))
+        if (opts.isEmpty()) Text("Nothing can go here.", fontFamily = MONO, fontSize = 13.sp, color = Palette.TextDim)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            opts.take(4).forEach { opt ->
+                Button(onClick = { onPick(opt) }, enabled = true,
+                    colors = ButtonDefaults.buttonColors(containerColor = Palette.Panel, contentColor = Palette.TextMain)) {
+                    Text("${opt.label}\n${opt.cost}¤", fontFamily = MONO, fontSize = 11.sp)
+                }
+            }
+        }
+        if (opts.size > 4) {
+            Text("+${opts.size - 4} more — scroll list in full build sheet", fontFamily = MONO, fontSize = 10.sp, color = Palette.TextDim)
+        }
     }
 }
 
-private fun drawCompatRoundRect(scope: androidx.compose.ui.graphics.drawscope.DrawScope, c: Offset, r: Float, color: Color) {
-    val path = Path().apply {
-        addRoundRect(
-            androidx.compose.ui.geometry.RoundRect(
-                androidx.compose.ui.geometry.Rect(c.x - r, c.y - r, c.x + r, c.y + r),
-                androidx.compose.ui.geometry.CornerRadius(r * 0.3f, r * 0.3f)
-            )
-        )
-    }
-    scope.drawPath(path, color)
+private fun itemShort(i: Item) = when (i) {
+    Item.IRON_ORE -> "IRON ORE"
+    Item.COPPER_ORE -> "COPPER"
+    Item.COAL -> "COAL"
+    Item.IRON_INGOT -> "INGOT"
+    Item.COPPER_INGOT -> "CU INGOT"
+    Item.STEEL_INGOT -> "STEEL"
+    Item.STEEL_BEAM -> "BEAM"
+    Item.IRON_PLATE -> "PLATE"
+    Item.IRON_ROD -> "ROD"
+    Item.IRON_SCREW -> "SCREW"
+    Item.WIRE -> "WIRE"
+    Item.CABLE -> "CABLE"
+    Item.REINFORCED_IRON_PLATE -> "RIP"
+    Item.IRON_ROTOR -> "ROTOR"
+    Item.SMART_PLATING -> "PLATING"
+    Item.MODULAR_FRAME -> "FRAME"
+    Item.AUTOMATED_WIRING -> "WIRING"
 }
 
-
+@Composable
+private fun ColumnScopeSpaced() { Spacer(Modifier.height(6.dp)) }

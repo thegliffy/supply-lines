@@ -2,33 +2,63 @@ package com.gliffy.supplylines.engine
 
 import kotlinx.serialization.Serializable
 
+/** Items the belts carry — real Satisfactory names & recipes (no fluids yet). */
 @Serializable
-enum class ResourceKind { ORE, PART, CHIP }
+enum class Item {
+    IRON_ORE, COPPER_ORE, COAL,
+    IRON_INGOT, COPPER_INGOT, STEEL_INGOT, STEEL_BEAM,
+    IRON_PLATE, IRON_ROD, IRON_SCREW,
+    WIRE, CABLE,
+    REINFORCED_IRON_PLATE, IRON_ROTOR, SMART_PLATING,
+    MODULAR_FRAME, AUTOMATED_WIRING
+}
 
 @Serializable
-enum class NodeKind { SOURCE, CONVERTER, DEPOT, MARKET }
+enum class BuildingKind {
+    MINER, SMELTER, MANUAL_BENCH, MANUFACTURER, CONSTRUCTOR, ASSEMBLER,
+    FOUNDRY, STORAGE, HUB, ELEVATOR, SINK
+}
 
-/** Static definition of a map node. Coordinates are normalized 0..1 (x right, y down). */
+/** One recipe a building can run: inputs consumed -> outputs produced, per craft. */
 @Serializable
-data class NodeDef(
+data class RecipeDef(
     val id: String,
-    val kind: NodeKind,
-    val name: String,
-    val x: Double,
-    val y: Double,
-    /** Sources + converters: what this node pushes into the network. */
-    val produce: ResourceKind? = null,
-    /** Units per second at tier 0. */
-    val rate: Double = 0.0,
-    /** Consumes: resource -> demand units per second (markets pay, converters feed). */
-    val wants: Map<ResourceKind, Double> = emptyMap(),
-    /** Market payout in coins per unit delivered. */
-    val pay: Map<ResourceKind, Int> = emptyMap(),
-    /** Base cost of the first node-tier upgrade (escalates x4 per tier). */
-    val upgBase: Long = 100,
-    /** Coins to activate this node; 0 = active from the start. */
-    val unlockCost: Long = 0
+    val building: BuildingKind,
+    val inputs: Map<Item, Int>,
+    val outputs: Map<Item, Int>,
+    /** Seconds per craft at tier 0. */
+    val craftTime: Double,
+    /** Gate id that unlocks this recipe; null = available from the start. */
+    val gate: String? = null
 )
+
+@Serializable
+data class BuildingDef(
+    val kind: BuildingKind,
+    val name: String,
+    /** Build cost in coins; 0 for fixed structures. */
+    val cost: Long = 0,
+    /** Miners must sit on a matching ore cell. */
+    val needsOre: Item? = null,
+    val fixed: Boolean = false,
+    /** Gate that must be complete before this can be built; null = from start. */
+    val gate: String? = null,
+    /** Miners only: base items/sec at tier 0 (real Mk.1 rates). */
+    val rate: Double = 0.0
+)
+
+/** Tech tree gate, sequential. Complete one to unlock the next (and recipes). */
+@Serializable
+data class GateDef(
+    val id: String,
+    val name: String,
+    val building: BuildingKind,
+    val requires: Map<Item, Int>
+)
+
+/** Terrain: ore spots on the 10x10 grid (x, y in 0..9). */
+@Serializable
+data class OreCell(val x: Int, val y: Int, val item: Item)
 
 @Serializable
 data class LineState(
@@ -36,43 +66,47 @@ data class LineState(
     val b: String,
     var speedTier: Int = 0,
     var capTier: Int = 0,
-    /** Shipments currently occupying this line. */
     var reserved: Int = 0
 )
 
 @Serializable
 data class ShipmentState(
-    /** Node ids, origin .. destination. */
     val path: List<String>,
     var edge: Int = 0,
-    /** Seconds elapsed on the current edge. */
     var progress: Double = 0.0,
-    val res: ResourceKind
+    val item: Item
 )
 
 @Serializable
-data class NodeRuntime(
+data class BuildingRuntime(
     val id: String,
-    var unlocked: Boolean,
+    val defId: String = "",
+    val kind: BuildingKind,
+    val x: Int,
+    val y: Int,
+    /** Fixed structures have no chosen recipe. Machines: the one it runs. */
+    var recipe: String? = null,
     var tier: Int = 0,
-    /** Items waiting to be dispatched (converted/produced), per resource. */
+    /** Items sitting here (unconsumed inputs or waiting outputs), per item. */
     var stock: MutableMap<String, Int> = mutableMapOf(),
-    /** Fractional production credit (units). */
-    var prodCredit: Double = 0.0,
-    /** Consumable demand credit per resource, in whole units. */
+    /** Fractional craft progress (seconds). */
+    var craftClock: Double = 0.0,
+    /** Demand credit per item, whole units. */
     var wantCredit: MutableMap<String, Double> = mutableMapOf()
 )
 
 @Serializable
 data class WorldState(
     var coins: Long,
-    var nodes: MutableMap<String, NodeRuntime> = mutableMapOf(),
+    /** All buildings on the map (fixed + placed), keyed by id. */
+    var buildings: MutableMap<String, BuildingRuntime> = mutableMapOf(),
     var lines: MutableList<LineState> = mutableListOf(),
     var shipments: MutableList<ShipmentState> = mutableListOf(),
-    var delivered: MutableMap<String, Long> = mutableMapOf(),
+    /** gate id -> items delivered toward it. */
+    var gateProgress: MutableMap<String, Long> = mutableMapOf(),
+    /** Gates completed, in order. */
+    var gatesDone: MutableList<String> = mutableListOf(),
     var earnedTotal: Long = 0,
-    /** Epoch seconds at save time (for offline earnings). */
     var lastSaveEpochSec: Long = 0,
-    /** Fast exponential moving average of coins/sec for the UI + offline calc. */
     var cpsAlpha: Double = 0.0
 )

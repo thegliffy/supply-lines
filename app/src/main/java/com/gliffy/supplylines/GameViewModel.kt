@@ -10,10 +10,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import androidx.lifecycle.viewModelScope
+import com.gliffy.supplylines.engine.BuildingDef
 import com.gliffy.supplylines.engine.Content
 import com.gliffy.supplylines.engine.GameEngine
+import com.gliffy.supplylines.engine.GateDef
 import com.gliffy.supplylines.engine.WorldState
 import java.io.File
+
+/** What the build menu can offer for a given empty cell. */
+data class BuildOption(val defId: String, val recipeId: String?, val label: String, val cost: Long)
 
 /**
  * Owns the engine + the tick loop, runs at 10 Hz on the main thread (the
@@ -49,6 +54,8 @@ class GameViewModel(app: Application) : androidx.lifecycle.AndroidViewModel(app)
             }
         }
 
+        engine.gateCompleted = { g -> _toast.value = "${g.name} COMPLETE — new recipes unlocked" }
+
         viewModelScope.launch {
             var sinceSave = 0
             while (true) {
@@ -74,7 +81,6 @@ class GameViewModel(app: Application) : androidx.lifecycle.AndroidViewModel(app)
 
     fun resetGame() {
         saveFile.delete()
-        // Simplest correct reset: nuke state and rebuild.
         val fresh = GameEngine(Content.DEFAULT)
         copyState(fresh, engine)
         _toast.value = "Game reset"
@@ -84,21 +90,48 @@ class GameViewModel(app: Application) : androidx.lifecycle.AndroidViewModel(app)
         // engine.state is val; copy fields in.
         val t = to.state
         val s = from.state
-        t.coins = s.coins; t.nodes.clear(); t.nodes.putAll(s.nodes)
+        t.coins = s.coins; t.buildings.clear(); t.buildings.putAll(s.buildings)
         t.lines.clear(); t.lines.addAll(s.lines); t.shipments.clear(); t.shipments.addAll(s.shipments)
-        t.delivered.clear(); t.delivered.putAll(s.delivered); t.earnedTotal = s.earnedTotal
+        t.gateProgress.clear(); t.gateProgress.putAll(s.gateProgress); t.gatesDone.clear(); t.gatesDone.addAll(s.gatesDone)
+        t.earnedTotal = s.earnedTotal
         t.cpsAlpha = s.cpsAlpha
     }
 
     // ---- Actions (called by UI; engine decides legality) ----
 
+    fun buildOptionsFor(x: Int, y: Int): List<BuildOption> {
+        val out = mutableListOf<BuildOption>()
+        for ((defId, d) in engine.content.defs) {
+            if (d.fixed) continue
+            if (!engine.canPlace(defId, x, y)) continue
+            val recipes = engine.recipesFor(defId)
+            if (recipes.isEmpty() && d.kind != com.gliffy.supplylines.engine.BuildingKind.MINER &&
+                d.kind != com.gliffy.supplylines.engine.BuildingKind.STORAGE) continue
+            when {
+                recipes.isNotEmpty() -> recipes.forEach { r ->
+                    out.add(BuildOption(defId, r.id, "${d.name} · ${r.id.substringAfter('_').uppercase()}", d.cost))
+                }
+                else -> out.add(BuildOption(defId, null, d.name, d.cost))
+            }
+        }
+        return out.sortedBy { it.cost }
+    }
+
+    fun place(defId: String, recipeId: String?, x: Int, y: Int): Boolean {
+        val id = engine.place(defId, x, y, recipeId) ?: return false
+        return id.isNotEmpty()
+    }
+
+    fun sell(id: String): Boolean = engine.sell(id)
     fun tryBuildLine(a: String, b: String): Boolean = engine.buildLine(a, b)
-    fun tryUnlock(id: String): Boolean = engine.unlockNode(id)
-    fun tryUpgradeNode(id: String): Boolean = engine.upgradeNode(id)
+    fun tryUpgradeBuilding(id: String): Boolean = engine.upgradeBuilding(id)
     fun tryUpgradeLineSpeed(a: String, b: String): Boolean =
         engine.line(a, b)?.let { engine.upgradeLineSpeed(it) } ?: false
     fun tryUpgradeLineCap(a: String, b: String): Boolean =
         engine.line(a, b)?.let { engine.upgradeLineCap(it) } ?: false
+
+    fun currentGate(): GateDef? = engine.currentGate()
+    fun defFor(defId: String): BuildingDef = engine.def(defId)
 
     fun toast(msg: String) { _toast.value = msg }
 }

@@ -27,6 +27,13 @@ gradle assembleDebug   # AGP 8.5.2, compileSdk 35, minSdk 26
 ```
 
 ## Status
-v0.1.0 — vertical slice: 9 nodes, 3 resource chains, per-line upgrades,
-offline earnings. No sound, no animations beyond the moving dots, no
-achievements. Playable.
+v0.2.0 — the map is now a real **10×10 build grid** with a Satisfactory-style
+tech tree: miners only go on matching ore cells, the HUB grants sequential
+milestone upgrades, and the early recipe chain is faithful (iron/copper/coal
+→ ingots → plates/rods/screws → reinforced plate/rotor → smart plating →
+space elevator phase 1). Belts have Mk.1–5 speed and capacity tiers.
+13 JVM tests cover placement rules, belt capacity, multi-input recipes,
+gate unlocks, save/load and offline earnings.
+
+v0.1.0 — vertical slice: abstract node map, 3 resource chains, per-line
+upgrades, offline earnings. Playable.
